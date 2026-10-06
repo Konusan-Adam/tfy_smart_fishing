@@ -1,0 +1,8 @@
+{
+  "name": "TFY SMART FISHING",
+  "description": "TFY Akıllı Balıkçılık & Çadır Alarm Sistemi. Bluetooth ve Wi-Fi üzerinden çalışan, Euler-Bernoulli sensör kalibrasyonlu sazan alarmı.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
