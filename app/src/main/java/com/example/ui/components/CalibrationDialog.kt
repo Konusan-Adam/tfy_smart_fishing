@@ -49,6 +49,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
@@ -92,7 +93,8 @@ fun CalibrationDialog(
     rodProfiles: List<RodProfile>,
     onDismiss: () -> Unit,
     onApplyCalibration: (rodId: Int, profile: RodProfile, result: CalculatedSensorCalibration) -> Unit,
-    onSaveNewProfile: (profile: RodProfile) -> Unit
+    onSaveNewProfile: (profile: RodProfile) -> Unit,
+    onResetPreTension: ((rodId: Int) -> Unit)? = null
 ) {
     val activeLibrary = if (rodProfiles.isEmpty()) AppDatabase.DEFAULT_PRESETS else rodProfiles
 
@@ -908,33 +910,50 @@ fun CalibrationDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    val activeProfile = RodProfile(
-                        name = customName.ifBlank { selectedProfile.name },
-                        lengthMeters = currentLengthMeters,
-                        sensorDistanceCm = currentSensorDistCm,
-                        testCurveLbs = currentTestCurveLbs,
-                        materialType = currentMaterial.name,
-                        actionType = currentAction.name,
-                        waterType = currentEnvironment.name,
-                        categoryType = currentCategory.name,
-                        isPreset = false
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onResetPreTension != null) {
+                    OutlinedButton(
+                        onClick = { onResetPreTension(rod.id) },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("reset_tension_btn")
+                    ) {
+                        Text("🎯 Misina Gerilimini Sıfırla (0° Baseline)", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
+                Button(
+                    onClick = {
+                        val activeProfile = RodProfile(
+                            name = customName.ifBlank { selectedProfile.name },
+                            lengthMeters = currentLengthMeters,
+                            sensorDistanceCm = currentSensorDistCm,
+                            testCurveLbs = currentTestCurveLbs,
+                            materialType = currentMaterial.name,
+                            actionType = currentAction.name,
+                            waterType = currentEnvironment.name,
+                            categoryType = currentCategory.name,
+                            isPreset = false
+                        )
+                        onApplyCalibration(rod.id, activeProfile, physicsCalculation)
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("apply_physics_calibration_btn")
+                ) {
+                    Icon(Icons.Default.BookmarkAdded, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "💾 Hafızaya Al & Oltaya Uygula",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Bold
                     )
-                    onApplyCalibration(rod.id, activeProfile, physicsCalculation)
-                    onDismiss()
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.testTag("apply_physics_calibration_btn")
-            ) {
-                Icon(Icons.Default.BookmarkAdded, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "💾 Hafızaya Al & Oltaya Uygula",
-                    color = Color.Black,
-                    fontWeight = FontWeight.Bold
-                )
+                }
             }
         },
         dismissButton = {

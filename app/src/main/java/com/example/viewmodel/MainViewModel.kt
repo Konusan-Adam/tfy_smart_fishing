@@ -90,6 +90,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _soundStyle = MutableStateFlow(SoundStyle.VOICE_AND_SIREN)
     val soundStyle: StateFlow<SoundStyle> = _soundStyle.asStateFlow()
 
+    private val _appVolume = MutableStateFlow(1.0f)
+    val appVolume: StateFlow<Float> = _appVolume.asStateFlow()
+
+    // 📁 Senaryo Bazlı Özel MP3 / Ses Yolları & İsimleri
+    private val _customNormalSoundUri = MutableStateFlow<String?>(null)
+    val customNormalSoundUri: StateFlow<String?> = _customNormalSoundUri.asStateFlow()
+    private val _customNormalSoundName = MutableStateFlow<String?>(null)
+    val customNormalSoundName: StateFlow<String?> = _customNormalSoundName.asStateFlow()
+
+    private val _customDropBackSoundUri = MutableStateFlow<String?>(null)
+    val customDropBackSoundUri: StateFlow<String?> = _customDropBackSoundUri.asStateFlow()
+    private val _customDropBackSoundName = MutableStateFlow<String?>(null)
+    val customDropBackSoundName: StateFlow<String?> = _customDropBackSoundName.asStateFlow()
+
+    private val _customTheftSoundUri = MutableStateFlow<String?>(null)
+    val customTheftSoundUri: StateFlow<String?> = _customTheftSoundUri.asStateFlow()
+    private val _customTheftSoundName = MutableStateFlow<String?>(null)
+    val customTheftSoundName: StateFlow<String?> = _customTheftSoundName.asStateFlow()
+
+    private val _customDragSoundUri = MutableStateFlow<String?>(null)
+    val customDragSoundUri: StateFlow<String?> = _customDragSoundUri.asStateFlow()
+    private val _customDragSoundName = MutableStateFlow<String?>(null)
+    val customDragSoundName: StateFlow<String?> = _customDragSoundName.asStateFlow()
+
+    private val prefs by lazy {
+        application.getSharedPreferences("tfy_smart_fishing_prefs", android.content.Context.MODE_PRIVATE)
+    }
+
     private val _isNightModeEnabled = MutableStateFlow(false)
     val isNightModeEnabled: StateFlow<Boolean> = _isNightModeEnabled.asStateFlow()
 
@@ -350,6 +378,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        try {
+            val savedName = prefs.getString("user_name", "Fikret") ?: "Fikret"
+            userName = savedName
+
+            val savedStyleName = prefs.getString("sound_style", SoundStyle.VOICE_AND_SIREN.name)
+            val style = try {
+                SoundStyle.valueOf(savedStyleName ?: "")
+            } catch (_: Exception) {
+                SoundStyle.VOICE_AND_SIREN
+            }
+            _soundStyle.value = style
+
+            val savedVol = prefs.getFloat("app_volume", 1.0f)
+            _appVolume.value = savedVol
+            soundManager.setVolume(savedVol)
+
+            val normUri = prefs.getString("custom_sound_normal_uri", null)
+            val normName = prefs.getString("custom_sound_normal_name", null)
+            _customNormalSoundUri.value = normUri
+            _customNormalSoundName.value = normName
+            soundManager.customNormalSoundUri = normUri
+
+            val dropUri = prefs.getString("custom_sound_dropback_uri", null)
+            val dropName = prefs.getString("custom_sound_dropback_name", null)
+            _customDropBackSoundUri.value = dropUri
+            _customDropBackSoundName.value = dropName
+            soundManager.customDropBackSoundUri = dropUri
+
+            val theftUri = prefs.getString("custom_sound_theft_uri", null)
+            val theftName = prefs.getString("custom_sound_theft_name", null)
+            _customTheftSoundUri.value = theftUri
+            _customTheftSoundName.value = theftName
+            soundManager.customTheftSoundUri = theftUri
+
+            val dragUri = prefs.getString("custom_sound_drag_uri", null)
+            val dragName = prefs.getString("custom_sound_drag_name", null)
+            _customDragSoundUri.value = dragUri
+            _customDragSoundName.value = dragName
+            soundManager.customDragSoundUri = dragUri
+        } catch (e: Exception) {
+            android.util.Log.w("MainViewModel", "Error loading prefs: ${e.message}")
+        }
+
         // Güç Tasarrufu Modu Canlı Dinleyicisi
         val pm = application.getSystemService(Context.POWER_SERVICE) as? PowerManager
         val initialPowerSave = pm?.isPowerSaveMode == true
@@ -440,7 +511,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _weatherData.value = weatherRepository.getWeatherData(41.0082, 28.9784)
                 }
             } catch (e: Exception) {
-                android.util.Log.e("MainViewModel", "Weather error: ${e.message}")
+                android.util.Log.w("MainViewModel", "Weather fetch skipped: ${e.message}")
             }
         }
     }
@@ -651,12 +722,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val cmd = config.toCommandString(rodId)
         transmitCommand(cmd)
-        val hassasiyetCmd = "HASSASIYET_${rodId}_${config.shockAccelThresholdMg.toInt()}"
-        transmitCommand(hassasiyetCmd)
-        viewModelScope.launch {
-            val rodName = _rods.value.find { it.id == rodId }?.name ?: "$rodId. Olta"
-            _toastEvent.emit("⚡ $rodName eşikleri donanıma aktarıldı: ${config.shockAccelThresholdMg.toInt()} mG")
-        }
     }
 
     fun updateLedColor(rodId: Int, color: RgbLedColor) {
@@ -765,6 +830,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _toastEvent.emit("✓ Olta #$rodId donanım eşiği $shockMg mG olarak onaylandı! ⚡")
                     }
                 }
+            }
+        }
+
+        // 0.06 TELEMETRİ / SENSÖR X-Y-Z SİNYAL DEĞERLENDİRME (IMU_1_12.5_0.2_450 veya TELEMETRY_1_Pitch_Roll_Jerk)
+        if (message.contains("IMU") || message.contains("TELEMETRY") || message.contains("XYZ") || message.contains("MPU")) {
+            val parts = message.split("_").filter { it.isNotEmpty() }
+            val rodId = parts.firstNotNullOfOrNull { it.toIntOrNull() }
+            if (rodId != null && rodId in 1..10) {
+                val numbers = parts.mapNotNull { it.toDoubleOrNull() }
+                if (numbers.size >= 3) {
+                    val pitch = numbers[0]
+                    val roll = numbers[1]
+                    val jerkMg = (numbers[2] * if (numbers[2] < 50.0) 1000.0 else 1.0).toInt()
+
+                    val strike = com.example.engine.SensorSignalEvaluator.processTelemetry(
+                        rodId = rodId,
+                        rawPitchDeg = pitch,
+                        rawRollDeg = roll,
+                        jerkMilliG = jerkMg
+                    )
+
+                    _rods.value = _rods.value.map {
+                        if (it.id == rodId) it.copy(isOnline = true, lastSeenTime = System.currentTimeMillis()) else it
+                    }
+
+                    when (strike.result) {
+                        com.example.engine.SensorEvaluationResult.STRIKE_FORWARD -> {
+                            triggerNormalAlarmForRod(rodId, strike.calculatedIntensity)
+                            return
+                        }
+                        com.example.engine.SensorEvaluationResult.DROP_BACK -> {
+                            triggerDropBackAlarmForRod(rodId)
+                            return
+                        }
+                        com.example.engine.SensorEvaluationResult.THEFT_REMOVAL -> {
+                            triggerTheftAlarmForRod(rodId)
+                            return
+                        }
+                        com.example.engine.SensorEvaluationResult.NOISE_FILTERED -> {
+                            // Rüzgar ve dalga hareketi filrelendi, alarm verilmedi
+                            return
+                        }
+                    }
+                }
+            }
+        }
+
+        // 0.07 GERİLİM KALİBRASYONU (MISİNA GERİLDİĞİNDE 0° REFERANSI ALMA)
+        if (message.contains("SIFIRLA") || message.contains("GERILIM_SIFIR") || message.contains("ZERO")) {
+            val parts = message.split("_").filter { it.isNotEmpty() }
+            val rodId = parts.firstNotNullOfOrNull { it.toIntOrNull() }
+            if (rodId != null && rodId in 1..10) {
+                resetPreTensionBaseline(rodId)
+                return
             }
         }
 
@@ -940,18 +1059,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Güvenli Alarm Sesi Testi (Ayarlar menüsünden çağrılır, 3 saniye çalıp kendiliğinden durur)
      */
-    fun testAlarmSound() {
+    fun testAlarmSound(customStyle: SoundStyle? = null) {
         viewModelScope.launch {
             soundManager.triggerAlarm(
                 rodId = 1,
                 rodName = "1. Olta",
                 userName = userName,
-                soundStyle = _soundStyle.value
+                soundStyle = customStyle ?: _soundStyle.value
             )
             flashManager.startStrobe()
             delay(3200)
             soundManager.stopAlarm()
             flashManager.stopStrobe()
+        }
+    }
+
+    /**
+     * Boşa Düşme (Drop-Back) Alarm Sesini Test Et
+     */
+    fun testDropBackSound(customStyle: SoundStyle? = null) {
+        viewModelScope.launch {
+            soundManager.triggerDropBackAlarm(
+                rodId = 1,
+                rodName = "1. Olta",
+                userName = userName,
+                soundStyle = customStyle ?: _soundStyle.value
+            )
+            delay(2800)
+            soundManager.stopAlarm()
+        }
+    }
+
+    /**
+     * Hırsızlık Alarm Sesini Test Et
+     */
+    fun testTheftSound(customStyle: SoundStyle? = null) {
+        viewModelScope.launch {
+            soundManager.triggerTheftAlarm(
+                rodId = 1,
+                rodName = "1. Olta",
+                userName = userName,
+                soundStyle = customStyle ?: _soundStyle.value
+            )
+            delay(2600)
+            soundManager.stopAlarm()
         }
     }
 
@@ -962,6 +1113,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         soundManager.playReelDragClickerSound(1400)
         viewModelScope.launch {
             _toastEvent.emit("🎣 Kalama Makara Sesi Çalıyor (CZZZT!)")
+        }
+    }
+
+    /**
+     * Senaryo Bazlı Özel MP3 / Ses Yolu Atama & Temizleme
+     * scenarioKey: "normal", "dropback", "theft", "drag"
+     */
+    fun setCustomSound(scenarioKey: String, uriString: String?, displayName: String?) {
+        when (scenarioKey) {
+            "normal" -> {
+                _customNormalSoundUri.value = uriString
+                _customNormalSoundName.value = displayName
+                soundManager.customNormalSoundUri = uriString
+                prefs.edit()
+                    .putString("custom_sound_normal_uri", uriString)
+                    .putString("custom_sound_normal_name", displayName)
+                    .apply()
+            }
+            "dropback" -> {
+                _customDropBackSoundUri.value = uriString
+                _customDropBackSoundName.value = displayName
+                soundManager.customDropBackSoundUri = uriString
+                prefs.edit()
+                    .putString("custom_sound_dropback_uri", uriString)
+                    .putString("custom_sound_dropback_name", displayName)
+                    .apply()
+            }
+            "theft" -> {
+                _customTheftSoundUri.value = uriString
+                _customTheftSoundName.value = displayName
+                soundManager.customTheftSoundUri = uriString
+                prefs.edit()
+                    .putString("custom_sound_theft_uri", uriString)
+                    .putString("custom_sound_theft_name", displayName)
+                    .apply()
+            }
+            "drag" -> {
+                _customDragSoundUri.value = uriString
+                _customDragSoundName.value = displayName
+                soundManager.customDragSoundUri = uriString
+                prefs.edit()
+                    .putString("custom_sound_drag_uri", uriString)
+                    .putString("custom_sound_drag_name", displayName)
+                    .apply()
+            }
+        }
+        viewModelScope.launch {
+            if (uriString != null) {
+                _toastEvent.emit("🎵 $displayName adındaki özel ses tanımlandı!")
+            } else {
+                _toastEvent.emit("🔄 Varsayılan ses düzenine dönüldü.")
+            }
         }
     }
 
@@ -1108,11 +1311,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * BALIKÇI İSMİ & SES TONU AYARLARINI GÜNCELLEME:
+     * BALIKÇI İSMİ, SES TONU VE UYGULAMA SES SEVİYESİ AYARLARINI GÜNCELLEME:
      */
-    fun updateAudioSettings(newUserName: String, newStyle: SoundStyle) {
+    fun updateAudioSettings(newUserName: String, newStyle: SoundStyle, newVolume: Float = _appVolume.value) {
         userName = newUserName
         _soundStyle.value = newStyle
+        val clampedVol = newVolume.coerceIn(0f, 1f)
+        _appVolume.value = clampedVol
+        soundManager.setVolume(clampedVol)
+
+        try {
+            prefs.edit()
+                .putString("user_name", newUserName)
+                .putString("sound_style", newStyle.name)
+                .putFloat("app_volume", clampedVol)
+                .apply()
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Error saving prefs", e)
+        }
+    }
+
+    /**
+     * CANLI SES SEVİYESİ DEĞİŞİMİ (Sürgü kaydırılırken anlık duyma):
+     */
+    fun setAppVolumeLive(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        _appVolume.value = clamped
+        soundManager.setVolume(clamped)
     }
 
     /**
@@ -1248,23 +1473,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeFightRodId = null
     }
 
-    fun triggerAlarmForRod(rodId: Int) {
-        val current = _rods.value.find { it.id == rodId }?.strikeIntensity ?: 75
-        val nextIntensity = when {
-            current < 45 -> 65
-            current < 75 -> 95
-            else -> 30
-        }
-        triggerNormalAlarmForRod(rodId, nextIntensity)
-    }
 
-    fun triggerDropBackSim(rodId: Int) {
-        triggerDropBackAlarmForRod(rodId)
-    }
-
-    fun simulateBattery(rodId: Int, percent: Int) {
-        updateBattery(rodId, percent)
-    }
 
     fun startCalibrationForRod(rod: FishingRod) {
         _calibratingRod.value = rod
@@ -1285,6 +1494,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveNewRodProfile(profile: RodProfile) {
         viewModelScope.launch {
             rodProfileDao.insertRodProfile(profile)
+        }
+    }
+
+    fun resetPreTensionBaseline(rodId: Int, pitch: Double = 0.0, roll: Double = 0.0) {
+        val resultText = com.example.engine.SensorSignalEvaluator.resetPreTensionBaseline(rodId, pitch, roll)
+        transmitCommand("SIFIRLA:$rodId")
+        viewModelScope.launch {
+            _toastEvent.emit(resultText)
         }
     }
 

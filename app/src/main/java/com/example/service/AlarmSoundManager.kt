@@ -5,7 +5,9 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.MediaPlayer
 import android.media.ToneGenerator
+import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -44,7 +46,52 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
     @Volatile private var isDragStreaming = false
 
     private var toneGenerator: ToneGenerator? = null
+    @Volatile var currentVolume: Float = 1.0f
     private val scope = CoroutineScope(Dispatchers.Default)
+
+    // 📁 KULLANICI SEÇİMLİ ÖZEL MP3 / ZİL SESİ ADRESLERİ (TÜM SENARYOLAR İÇİN)
+    @Volatile var customNormalSoundUri: String? = null
+    @Volatile var customDropBackSoundUri: String? = null
+    @Volatile var customTheftSoundUri: String? = null
+    @Volatile var customDragSoundUri: String? = null
+
+    private var customMediaPlayer: MediaPlayer? = null
+
+    private fun playCustomAudioLoop(uriString: String) {
+        stopCustomMediaPlayer()
+        try {
+            val uri = Uri.parse(uriString)
+            customMediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                setDataSource(context, uri)
+                isLooping = true
+                prepare()
+                setVolume(currentVolume, currentVolume)
+                start()
+            }
+        } catch (e: Exception) {
+            Log.e("AlarmSoundManager", "Error playing custom audio $uriString", e)
+        }
+    }
+
+    private fun stopCustomMediaPlayer() {
+        try {
+            customMediaPlayer?.let { mp ->
+                if (mp.isPlaying) {
+                    mp.stop()
+                }
+                mp.release()
+            }
+        } catch (e: Exception) {
+            Log.w("AlarmSoundManager", "Error stopping custom media player", e)
+        }
+        customMediaPlayer = null
+    }
 
     private val vibrator: Vibrator? by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -184,7 +231,7 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
                         // Yumuşak Başlangıç (0-50 ms fade in)
                         val masterEnvelope = if (currentSampleIndex < 2205) currentSampleIndex / 2205.0 else 1.0
 
-                        buffer[i] = (sampleVal * 29000.0 * masterEnvelope).toInt().coerceIn(-32767, 32767).toShort()
+                        buffer[i] = (sampleVal * 29000.0 * masterEnvelope * currentVolume).toInt().coerceIn(-32767, 32767).toShort()
                     }
 
                     dragAudioTrack?.write(buffer, 0, chunkSize)
@@ -223,19 +270,26 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
      */
     fun playReelDragClickerSound(durationMs: Int = 3800) {
         scope.launch {
-            maximizeAlarmVolume()
-            startContinuousMetallicDrag()
-            delay(durationMs.toLong())
-            // Eğer gerçek bir balık alarmı çalmıyorsa testi durdur
-            if (repeatingJob == null) {
-                stopContinuousMetallicDrag()
+            applyVolume()
+            if (!customDragSoundUri.isNullOrBlank()) {
+                playCustomAudioLoop(customDragSoundUri!!)
+                delay(durationMs.toLong())
+                if (repeatingJob == null) {
+                    stopCustomMediaPlayer()
+                }
+            } else {
+                startContinuousMetallicDrag()
+                delay(durationMs.toLong())
+                if (repeatingJob == null) {
+                    stopContinuousMetallicDrag()
+                }
             }
         }
     }
 
     /**
      * NORMAL VURUŞ ALARMI:
-     * 1. SUSTURANA KADAR KESİNTİSİZ GERÇEKÇİ KALAMA CIRLAMASI ("CZZZZZT - CIRRR-CIRRR")!
+     * 1. SUSTURANA KADAR KESİNTİSİZ GERÇEKÇİ KALAMA CIRLAMASI VEYA ÖZEL MP3!
      * 2. Eşzamanlı Türkçe sesli asistan (Kendi oltası veya Arkadaş oltası anonsu).
      * 3. Siren ve titreşim darbeleri.
      */
@@ -250,10 +304,22 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
         stopAlarm()
 
         repeatingJob = scope.launch {
-            maximizeAlarmVolume()
+            applyVolume()
 
-            // 1. KESİNTİSİZ METALİK KALAMA SESİNİ ANINDA BAŞLAT (SUSTURANA KADAR AKAR)
-            startContinuousMetallicDrag()
+            if (!customNormalSoundUri.isNullOrBlank()) {
+                playCustomAudioLoop(customNormalSoundUri!!)
+            } else {
+                val startDrag = (soundStyle == SoundStyle.REEL_DRAG_AND_VOICE) || (soundStyle == SoundStyle.VOICE_AND_SIREN)
+                if (startDrag) {
+                    if (!customDragSoundUri.isNullOrBlank()) {
+                        playCustomAudioLoop(customDragSoundUri!!)
+                    } else {
+                        startContinuousMetallicDrag()
+                    }
+                } else {
+                    stopContinuousMetallicDrag()
+                }
+            }
 
             val alarmSentence = if (isFriendRod && ownerName.isNotBlank()) {
                 if (userName.isNotBlank()) "$userName! Dikkat! $ownerName'nin $rodName oltasına balık vurdu, koş müdahale et!"
@@ -263,8 +329,8 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
             }
 
             while (isActive) {
-                // Siren/Ton çalma
-                if (soundStyle != SoundStyle.VOICE_ONLY) {
+                // Siren/Ton çalma (Sadece özel ses tanımlı değilse)
+                if (customNormalSoundUri.isNullOrBlank() && soundStyle != SoundStyle.VOICE_ONLY) {
                     try {
                         val toneType = when (soundStyle) {
                             SoundStyle.HIGH_PITCH_SIREN -> ToneGenerator.TONE_SUP_ERROR
@@ -295,8 +361,6 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
 
     /**
      * 3. TERSİNE VURUŞ (BALIK KAÇIRMA / BOŞA DÜŞME / DROP-BACK) ALARMI:
-     * Balık kıyıya yüzdüğü için misina gevşer, makara DÖNMEZ (Kalama çalmaz!).
-     * Swinger/asansörün düşme ikazı ve telaşlı Türkçe sesli uyarı verilir.
      */
     fun triggerDropBackAlarm(
         rodId: Int,
@@ -309,10 +373,13 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
         stopAlarm()
 
         repeatingJob = scope.launch {
-            maximizeAlarmVolume()
+            applyVolume()
 
-            // BOŞA DÜŞMEDE KALAMA SESİ ÇALMAZ (Makara dönmediği için sıfır kalama)
             stopContinuousMetallicDrag()
+
+            if (!customDropBackSoundUri.isNullOrBlank()) {
+                playCustomAudioLoop(customDropBackSoundUri!!)
+            }
 
             val urgentSentence = if (isFriendRod && ownerName.isNotBlank()) {
                 if (userName.isNotBlank()) "$userName! Dikkat! $ownerName'nin $rodName oltasında boşa düşme var, misina gevşedi, acele et boşluğu al!"
@@ -323,7 +390,7 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
             }
 
             while (isActive) {
-                if (soundStyle != SoundStyle.VOICE_ONLY) {
+                if (customDropBackSoundUri.isNullOrBlank() && soundStyle != SoundStyle.VOICE_ONLY) {
                     try {
                         toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 180)
                         delay(140)
@@ -350,7 +417,6 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
 
     /**
      * 5. HIRSIZLIK / SEHPADAN DİKİLME / KALDIRILMA ALARMI:
-     * Kamış yerinden söküldüğünde çalan acil durum alarmı.
      */
     fun triggerTheftAlarm(
         rodId: Int,
@@ -363,8 +429,12 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
         stopAlarm()
 
         repeatingJob = scope.launch {
-            maximizeAlarmVolume()
+            applyVolume()
             stopContinuousMetallicDrag()
+
+            if (!customTheftSoundUri.isNullOrBlank()) {
+                playCustomAudioLoop(customTheftSoundUri!!)
+            }
 
             val theftSentence = if (userName.isNotBlank()) {
                 "Tehlike! $userName, $rodName sehpadan kaldırıldı veya dikildi! Hırsızlık uyarısı!"
@@ -373,7 +443,7 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
             }
 
             while (isActive) {
-                if (soundStyle != SoundStyle.VOICE_ONLY) {
+                if (customTheftSoundUri.isNullOrBlank() && soundStyle != SoundStyle.VOICE_ONLY) {
                     try {
                         toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 450)
                     } catch (e: Exception) {
@@ -416,7 +486,7 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
      */
     fun triggerConnectionLostAlarm(title: String, speechText: String) {
         scope.launch {
-            maximizeAlarmVolume()
+            applyVolume()
 
             try {
                 toneGenerator?.startTone(ToneGenerator.TONE_SUP_ERROR, 350)
@@ -438,14 +508,32 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
         }
     }
 
-    private fun maximizeAlarmVolume() {
+    fun setVolume(volume: Float) {
+        currentVolume = volume.coerceIn(0f, 1f)
+        try {
+            toneGenerator?.release()
+            val volInt = (100 * currentVolume).toInt().coerceIn(0, 100)
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, volInt)
+        } catch (e: Exception) {
+            Log.w("AlarmSoundManager", "Re-init ToneGenerator error", e)
+        }
+        applyVolume()
+    }
+
+    private fun applyVolume() {
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             audioManager?.let { am ->
                 val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-                am.setStreamVolume(AudioManager.STREAM_ALARM, maxVol, 0)
+                val targetVol = (maxVol * currentVolume).toInt().coerceIn(0, maxVol)
+                am.setStreamVolume(AudioManager.STREAM_ALARM, targetVol, 0)
             }
-        } catch (_: Exception) {}
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                dragAudioTrack?.setVolume(currentVolume)
+            }
+        } catch (e: Exception) {
+            Log.w("AlarmSoundManager", "applyVolume error: ${e.message}")
+        }
     }
 
     private fun vibratePulse() {
@@ -483,6 +571,7 @@ class AlarmSoundManager(private val context: Context) : TextToSpeech.OnInitListe
         repeatingJob?.cancel()
         repeatingJob = null
         stopContinuousMetallicDrag()
+        stopCustomMediaPlayer()
         try {
             toneGenerator?.stopTone()
             tts?.stop()

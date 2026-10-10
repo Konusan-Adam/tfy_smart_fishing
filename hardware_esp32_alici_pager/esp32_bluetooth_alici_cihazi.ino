@@ -66,8 +66,9 @@ typedef struct __attribute__((packed)) {
     uint8_t  targetRodId;
     uint8_t  commandCode;       // 0: Kapat / Sustur, 1: Aç / Nöbet, 2: Dinamik Eşik Paketi
     uint16_t shockMg;           // mG Cinsinden Şok Eşiği (Örn: 250, 500, 750)
-    uint16_t dropBackTenthsDeg; // Derece x 10 (Örn: 1.5° -> 15)
-    uint16_t theftTenthsDeg;    // Derece x 10 (Örn: 18.0° -> 180)
+    uint16_t dropBackTenthsDeg; // Derece x 10 (Örn: 1.8° -> 18)
+    uint16_t theftTenthsDeg;    // Derece x 10 (Örn: 25.0° -> 250)
+    uint16_t strikeTenthsDeg;   // VURUŞ / ÖNE EĞİLME AÇISI Derece x 10 (Örn: 2.5° -> 25)
     uint8_t  sampleIntervalMs;  // 10 ms (100 Hz) veya 20 ms (50 Hz)
     uint16_t pingIntervalSec;   // Kalp Atışı Aralığı (Saniye) - Varsayılan: 14400 (4 saat)
 } RodCommandPacket;
@@ -196,9 +197,10 @@ void sendToAndroid(const char* message) {
 void forwardCommandToSensor(uint8_t rodId, uint8_t commandCode) {
     txCmd.targetRodId = rodId;
     txCmd.commandCode = commandCode;
-    txCmd.shockMg = 500;
-    txCmd.dropBackTenthsDeg = 15;
-    txCmd.theftTenthsDeg = 180;
+    txCmd.shockMg = 200;
+    txCmd.dropBackTenthsDeg = 4; // 0.4° hassas boşa düşme
+    txCmd.theftTenthsDeg = 250;
+    txCmd.strikeTenthsDeg = 25;
     txCmd.sampleIntervalMs = 20;
     txCmd.pingIntervalSec = 14400; // 4 saat
     esp_now_send(broadcastMac, (uint8_t *)&txCmd, sizeof(txCmd));
@@ -206,21 +208,22 @@ void forwardCommandToSensor(uint8_t rodId, uint8_t commandCode) {
 }
 
 // ⚡ Kamış Vericisine Dinamik Eşik ve Filtre Parametrelerini Fırlat
-void forwardThresholdToSensor(uint8_t rodId, uint16_t shockMg, uint16_t dropBackTenths, uint16_t theftTenths, uint8_t sampleMs, uint16_t pingSec) {
+void forwardThresholdToSensor(uint8_t rodId, uint16_t shockMg, uint16_t dropBackTenths, uint16_t theftTenths, uint16_t strikeTenths, uint8_t sampleMs, uint16_t pingSec) {
     txCmd.targetRodId = rodId;
     txCmd.commandCode = 2; // 2: Dinamik Eşik Paketi
     txCmd.shockMg = shockMg;
     txCmd.dropBackTenthsDeg = dropBackTenths;
     txCmd.theftTenthsDeg = theftTenths;
+    txCmd.strikeTenthsDeg = strikeTenths;
     txCmd.sampleIntervalMs = sampleMs;
     txCmd.pingIntervalSec = (pingSec > 0) ? pingSec : 14400;
 
     esp_now_send(broadcastMac, (uint8_t *)&txCmd, sizeof(txCmd));
-    Serial.printf("⚡ [DİNAMİK EŞİK TX] Olta #%d -> Şok: %d mG | Boşa: %.1f° | Hırsızlık: %.1f° | Hız: %d ms | Ping: %d sn\n",
-                  rodId, shockMg, dropBackTenths / 10.0f, theftTenths / 10.0f, sampleMs, txCmd.pingIntervalSec);
+    Serial.printf("⚡ [DİNAMİK EŞİK TX] Olta #%d -> Vuruş Açısı: %.1f° | Şok: %d mG | Boşa: %.1f° | Hırsızlık: %.1f° | Hız: %d ms | Ping: %d sn\n",
+                  rodId, strikeTenths / 10.0f, shockMg, dropBackTenths / 10.0f, theftTenths / 10.0f, sampleMs, txCmd.pingIntervalSec);
 
     // Telefona anında kabul edildi bilgisi ver
-    char buf[32];
+    char buf[48];
     snprintf(buf, sizeof(buf), "ESIK_OK_%d_%d\n", rodId, shockMg);
     sendToAndroid(buf);
 }
@@ -300,7 +303,7 @@ void processAndroidCommand(String rawCmd, int senderWifiIndex = -1) {
     cmd.toUpperCase();
     Serial.printf("📥 [CMD_RX] '%s'\n", cmd.c_str());
 
-    // 1. ⚡ DİNAMİK EŞİK PAKETİ: ESIK:<rodId>:<shockMg>:<dropBackDeg>:<theftDeg>:<sampleMs>:<pingSec>
+    // 1. ⚡ DİNAMİK EŞİK PAKETİ: ESIK:<rodId>:<shockMg>:<dropBackDeg>:<theftDeg>:<strikeDeg>:<sampleMs>:<pingSec>
     if (cmd.startsWith("ESIK:") || cmd.startsWith("ESIK_")) {
         char delimiter = cmd.startsWith("ESIK:") ? ':' : '_';
         int p1 = cmd.indexOf(delimiter);
@@ -309,22 +312,38 @@ void processAndroidCommand(String rawCmd, int senderWifiIndex = -1) {
         int p4 = cmd.indexOf(delimiter, p3 + 1);
         int p5 = cmd.indexOf(delimiter, p4 + 1);
         int p6 = cmd.indexOf(delimiter, p5 + 1);
+        int p7 = (p6 != -1) ? cmd.indexOf(delimiter, p6 + 1) : -1;
 
         uint8_t rodId = (p1 != -1 && p2 != -1) ? cmd.substring(p1 + 1, p2).toInt() : 1;
-        float shock = (p2 != -1 && p3 != -1) ? cmd.substring(p2 + 1, p3).toFloat() : 500.0f;
-        float dropBack = (p3 != -1 && p4 != -1) ? cmd.substring(p3 + 1, p4).toFloat() : 1.5f;
-        float theft = (p4 != -1 && p5 != -1) ? cmd.substring(p4 + 1, p5).toFloat() : 18.0f;
-        uint8_t sampleMs = (p5 != -1 && p6 != -1) ? cmd.substring(p5 + 1, p6).toInt() : (p5 != -1 ? cmd.substring(p5 + 1).toInt() : 20);
-        uint16_t pingSec = (p6 != -1) ? cmd.substring(p6 + 1).toInt() : 14400;
+        float shock = (p2 != -1 && p3 != -1) ? cmd.substring(p2 + 1, p3).toFloat() : 250.0f;
+        float dropBack = (p3 != -1 && p4 != -1) ? cmd.substring(p3 + 1, p4).toFloat() : 0.4f;
+        float theft = (p4 != -1 && p5 != -1) ? cmd.substring(p4 + 1, p5).toFloat() : 25.0f;
+        
+        float strike = 2.5f;
+        uint8_t sampleMs = 20;
+        uint16_t pingSec = 14400;
+
+        if (p7 != -1) {
+            // 7 Parametreli Yeni Format: ESIK:<rodId>:<shock>:<dropBack>:<theft>:<strike>:<sampleMs>:<pingSec>
+            strike = cmd.substring(p5 + 1, p6).toFloat();
+            sampleMs = cmd.substring(p6 + 1, p7).toInt();
+            pingSec = cmd.substring(p7 + 1).toInt();
+        } else {
+            // 6 Parametreli Format: ESIK:<rodId>:<shock>:<dropBack>:<theft>:<sampleMs>:<pingSec>
+            strike = 2.5f;
+            sampleMs = (p5 != -1 && p6 != -1) ? cmd.substring(p5 + 1, p6).toInt() : (p5 != -1 ? cmd.substring(p5 + 1).toInt() : 20);
+            pingSec = (p6 != -1) ? cmd.substring(p6 + 1).toInt() : 14400;
+        }
 
         if (shock < 50.0f) shock = 50.0f;
         if (shock > 1500.0f) shock = 1500.0f;
-        if (dropBack <= 0.0f) dropBack = 1.5f;
-        if (theft <= 0.0f) theft = 18.0f;
+        if (dropBack <= 0.0f) dropBack = 0.4f;
+        if (theft <= 0.0f) theft = 25.0f;
+        if (strike <= 0.0f) strike = 2.5f;
         if (sampleMs < 5 || sampleMs > 100) sampleMs = 20;
         if (pingSec < 10) pingSec = 14400;
 
-        forwardThresholdToSensor(rodId, (uint16_t)shock, (uint16_t)(dropBack * 10.0f), (uint16_t)(theft * 10.0f), sampleMs, pingSec);
+        forwardThresholdToSensor(rodId, (uint16_t)shock, (uint16_t)(dropBack * 10.0f), (uint16_t)(theft * 10.0f), (uint16_t)(strike * 10.0f), sampleMs, pingSec);
     }
     // 2. ⚡ DOĞRUDAN HASSASİYET KOMUTU: HASSASIYET_<rodId>_<deger> veya HASSASIYET:<rodId>:<deger>
     else if (cmd.startsWith("HASSASIYET_") || cmd.startsWith("HASSASIYET:")) {
@@ -334,7 +353,8 @@ void processAndroidCommand(String rawCmd, int senderWifiIndex = -1) {
         if (p1 != -1 && p2 != -1) {
             uint8_t rodId = cmd.substring(p1 + 1, p2).toInt();
             int val = cmd.substring(p2 + 1).toInt();
-            uint16_t shockMg = 500;
+            uint16_t shockMg = 250;
+            float strikeDeg = 2.5f;
             if (val > 10) {
                 // Doğrudan mG olarak gönderilmiş (örn: 250, 500, 750)
                 shockMg = (uint16_t)constrain(val, 50, 1500);
@@ -342,8 +362,9 @@ void processAndroidCommand(String rawCmd, int senderWifiIndex = -1) {
                 // 1..10 kademe skalası (1: 750 mG, 5: 483 mG, 10: 150 mG)
                 int clamped = constrain(val, 1, 10);
                 shockMg = (uint16_t)(750 - (clamped - 1) * 66);
+                strikeDeg = 4.5f - (clamped - 1) * 0.3f;
             }
-            forwardThresholdToSensor(rodId, shockMg, 15, 180, 20, 14400);
+            forwardThresholdToSensor(rodId, shockMg, 18, 250, (uint16_t)(strikeDeg * 10.0f), 20, 14400);
         }
     }
     // 3. ⚡ KALİBRASYON MOTORU KOMUTU: KALIBRE:<rodId>:<shockMg>:<dropBackTenths>:<filterTenths>:<level>
@@ -353,15 +374,14 @@ void processAndroidCommand(String rawCmd, int senderWifiIndex = -1) {
         int p2 = cmd.indexOf(delimiter, p1 + 1);
         int p3 = cmd.indexOf(delimiter, p2 + 1);
         int p4 = cmd.indexOf(delimiter, p3 + 1);
-        int p5 = cmd.indexOf(delimiter, p4 + 1);
 
         uint8_t rodId = (p1 != -1 && p2 != -1) ? cmd.substring(p1 + 1, p2).toInt() : 1;
-        uint16_t shockMg = (p2 != -1 && p3 != -1) ? cmd.substring(p2 + 1, p3).toInt() : 500;
-        uint16_t dropBackTenths = (p3 != -1 && p4 != -1) ? cmd.substring(p3 + 1, p4).toInt() : 15;
+        uint16_t shockMg = (p2 != -1 && p3 != -1) ? cmd.substring(p2 + 1, p3).toInt() : 250;
+        uint16_t dropBackTenths = (p3 != -1 && p4 != -1) ? cmd.substring(p3 + 1, p4).toInt() : 4;
         uint8_t sampleMs = 20;
         uint16_t pingSec = 14400;
 
-        forwardThresholdToSensor(rodId, shockMg, dropBackTenths, 180, sampleMs, pingSec);
+        forwardThresholdToSensor(rodId, shockMg, dropBackTenths, 250, 25, sampleMs, pingSec);
     }
     // 4. SENSÖR KAPAT / AÇ EMİRLERİ (GUC_1_0 veya GUC_1_1)
     else if (cmd.startsWith("GUC_") || cmd.startsWith("GUC:")) {

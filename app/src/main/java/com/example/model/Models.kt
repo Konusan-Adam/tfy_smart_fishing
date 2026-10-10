@@ -40,6 +40,24 @@ data class RgbLedColor(
         fun defaultForRod(id: Int): RgbLedColor {
             return PRESETS[(id - 1) % PRESETS.size]
         }
+
+        fun fromHex(hex: String, defaultName: String = "Özel Renk"): RgbLedColor {
+            return try {
+                val cleanHex = hex.removePrefix("#")
+                val longVal = cleanHex.toLong(16)
+                val color = if (cleanHex.length == 6) {
+                    Color(0xFF000000 or longVal)
+                } else if (cleanHex.length == 8) {
+                    Color(longVal)
+                } else {
+                    PRESET_CYAN.color
+                }
+                PRESETS.find { it.hexCode.equals("#" + cleanHex.takeLast(6).uppercase(), ignoreCase = true) }
+                    ?: RgbLedColor(color, defaultName)
+            } catch (_: Exception) {
+                PRESET_CYAN
+            }
+        }
     }
 }
 
@@ -51,20 +69,23 @@ enum class AlarmType {
 
 enum class SoundStyle(val title: String, val desc: String) {
     VOICE_AND_SIREN("Türkçe Asistan + Siren", "İsminiz, olta adı ve siren birlikte çalar"),
+    REEL_DRAG_AND_VOICE("Mekanik Kalama + Sesli Asistan", "Sazan makarası cırcır cırlaması ve Türkçe anons"),
     VOICE_ONLY("Sadece Sesli Asistan", "Siren olmadan sadece Türkçe sesli anons"),
     CLASSIC_BEEP("Klasik Elektronik Bip", "Geleneksel sazan alarmı kesik bip tonu"),
-    HIGH_PITCH_SIREN("Keskin Tiz Siren", "Uykudan uyandırıcı yüksek frekanslı alarm")
+    HIGH_PITCH_SIREN("Keskin Tiz Siren", "Uykudan uyandırıcı yüksek frekanslı alarm"),
+    POLICE_SIREN("Deniz Feneri & Polisiye Siren", "Yüksek güçlü polis/fener acil durum ikazı")
 }
 
 data class SensorThresholdConfig(
-    val shockAccelThresholdMg: Float = 500.0f,  // Şok Vuruş Eşiği (mG) (100.0 .. 1500.0)
-    val dropBackAngleDeg: Float = 1.5f,        // Boşa Düşme Eşiği (Derece) (1.0 .. 15.0)
-    val theftAngleDeg: Float = 18.0f,          // Hırsızlık Eşiği (Derece) (8.0 .. 45.0)
+    val shockAccelThresholdMg: Float = 250.0f,  // Şok Vuruş Eşiği (mG) (50.0 .. 1500.0)
+    val dropBackAngleDeg: Float = 0.35f,       // Boşa Düşme Eşiği (Derece) (0.2 .. 3.0)
+    val theftAngleDeg: Float = 25.0f,          // Hırsızlık Eşiği (Derece) (10.0 .. 60.0)
+    val strikeAngleDeg: Float = 2.5f,          // Vuruş / Öne Eğilme Açısı (Derece) (1.0 .. 25.0)
     val sampleIntervalMs: Int = 20,            // Örnekleme Aralığı (ms) (10ms=100Hz, 20ms=50Hz, 40ms=25Hz)
     val pingIntervalSec: Int = 14400           // Canlı Kalp Atışı (sn) (14400 sn = 4 saat - balık vurana kadar derin uyku)
 ) {
     fun toCommandString(rodId: Int): String {
-        return "ESIK:${rodId}:${String.format(java.util.Locale.US, "%.1f", shockAccelThresholdMg)}:${String.format(java.util.Locale.US, "%.1f", dropBackAngleDeg)}:${String.format(java.util.Locale.US, "%.1f", theftAngleDeg)}:${sampleIntervalMs}:${pingIntervalSec}"
+        return "ESIK:${rodId}:${String.format(java.util.Locale.US, "%.1f", shockAccelThresholdMg)}:${String.format(java.util.Locale.US, "%.1f", dropBackAngleDeg)}:${String.format(java.util.Locale.US, "%.1f", theftAngleDeg)}:${String.format(java.util.Locale.US, "%.1f", strikeAngleDeg)}:${sampleIntervalMs}:${pingIntervalSec}"
     }
 
     companion object {
@@ -80,12 +101,14 @@ data class SensorThresholdConfig(
         fun fromSensitivity(sensitivity: Int): SensorThresholdConfig {
             val clamped = sensitivity.coerceIn(1, 10)
             val shock = 750f - (clamped - 1) * (600f / 9f)
-            val dropBack = 9.0f - (clamped - 1) * 0.75f
-            val theft = 24.0f - (clamped - 1) * 1.33f
+            val dropBack = 0.8f - (clamped - 1) * 0.055f // 1: 0.8°, 5: 0.58°, 8: 0.41°, 10: 0.30°
+            val theft = 35.0f - (clamped - 1) * 1.5f
+            val strike = 4.5f - (clamped - 1) * 0.3f // 1: 4.5° (sadece basan balık), 10: 1.8° (hassas)
             return SensorThresholdConfig(
                 shockAccelThresholdMg = shock.coerceIn(100f, 1500f),
-                dropBackAngleDeg = dropBack.coerceIn(1.0f, 15f),
-                theftAngleDeg = theft.coerceIn(10f, 40f),
+                dropBackAngleDeg = dropBack.coerceIn(0.2f, 3.0f),
+                theftAngleDeg = theft.coerceIn(15f, 60f),
+                strikeAngleDeg = strike.coerceIn(1.0f, 15f),
                 sampleIntervalMs = if (clamped >= 8) 10 else 20,
                 pingIntervalSec = 14400 // 4 saat
             )

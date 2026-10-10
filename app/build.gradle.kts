@@ -3,6 +3,7 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
+  alias(libs.plugins.google.services)
 }
 
 android {
@@ -96,6 +97,10 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)
   
+  // Firebase & Messaging
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.messaging)
+
   // Weather & Location
   implementation(libs.play.services.location)
   implementation(libs.retrofit)

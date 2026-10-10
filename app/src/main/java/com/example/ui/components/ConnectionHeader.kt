@@ -1,6 +1,13 @@
 package com.example.ui.components
 
 import android.bluetooth.BluetoothDevice
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -43,7 +50,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -51,8 +60,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -140,15 +154,48 @@ fun ConnectionHeader(
                         .shadow(if (isAnyConnected) 6.dp else 0.dp, CircleShape, spotColor = NeonGreen)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
+                var titleWidthPx by remember { mutableFloatStateOf(400f) }
+                val infiniteTransition = rememberInfiniteTransition(label = "titleGradient")
+                val gradientProgress by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 2200, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "gradientProgress"
+                )
+
+                val logoGradientBrush = remember(gradientProgress, titleWidthPx) {
+                    val shift = gradientProgress * titleWidthPx * 2f
+                    Brush.linearGradient(
+                        colors = listOf(
+                            Color(0xFF00FF87), // 🟢 Neon Siber Yeşil Zemin
+                            Color(0xFF00E5FF), // ⚡ PARLAK NEON ELEKTRİK MAVİ AKINTI
+                            Color(0xFF0052FF), // ⚡ DERİN NEON MAVİ
+                            Color(0xFF00E5FF), // ⚡ PARLAK NEON ELEKTRİK MAVİ AKINTI
+                            Color(0xFF00FF87)  // 🟢 Neon Siber Yeşil Zemin
+                        ),
+                        start = Offset(shift, 0f),
+                        end = Offset(shift + titleWidthPx, 0f),
+                        tileMode = TileMode.Repeated
+                    )
+                }
+
                 Text(
                     text = "TFY SMART FISHING",
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.1.sp,
                         fontSize = 17.5.sp,
-                        color = Color.White
+                        brush = logoGradientBrush
                     ),
-                    maxLines = 1
+                    maxLines = 1,
+                    modifier = Modifier.onSizeChanged { size ->
+                        if (size.width > 0) {
+                            titleWidthPx = size.width.toFloat()
+                        }
+                    }
                 )
             }
 

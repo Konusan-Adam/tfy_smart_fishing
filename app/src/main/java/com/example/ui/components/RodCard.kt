@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -51,13 +52,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AlarmType
@@ -76,7 +80,7 @@ fun RodCard(
     onColorSelected: (RgbLedColor) -> Unit,
     onDropBackColorSelected: (RgbLedColor) -> Unit = {},
     onTheftColorSelected: (RgbLedColor) -> Unit = {},
-    onTestTriggerClick: () -> Unit,
+
     onEditRodClick: () -> Unit = {},
     onDeleteClick: () -> Unit = {},
     onToggleFriendWatch: () -> Unit = {},
@@ -108,32 +112,24 @@ fun RodCard(
     // Strobe border and ambient glow
     val borderStroke = if (rod.isAlarming) {
         BorderStroke(
-            width = (3.5.dp * strobeFlash) + 1.dp,
-            brush = Brush.radialGradient(
-                colors = listOf(Color.White, activeAlarmColor, Color.Transparent)
-            )
+            width = (3.dp * strobeFlash) + 1.dp,
+            color = activeAlarmColor
         )
     } else {
         BorderStroke(1.dp, NeonGreen)
-    }
-
-    val cardBg = if (rod.isAlarming) {
-        activeAlarmColor.copy(alpha = 0.25f + (0.50f * strobeFlash))
-    } else {
-        LuxuryCardBg
     }
 
     Card(
         modifier = modifier
             .fillMaxWidth()
             .shadow(
-                elevation = if (rod.isAlarming) 22.dp else 8.dp,
+                elevation = if (rod.isAlarming) 24.dp else 8.dp,
                 shape = RoundedCornerShape(26.dp),
                 spotColor = if (rod.isAlarming) activeAlarmColor else Color.Black
             )
             .testTag("rod_card_${rod.id}"),
         shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
+        colors = CardDefaults.cardColors(containerColor = LuxuryCardBg),
         border = borderStroke
     ) {
         Column(
@@ -171,10 +167,13 @@ fun RodCard(
                             text = rod.name.uppercase(),
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Black,
-                                fontSize = 24.sp, // 3sp artırıldı
-                                letterSpacing = 1.2.sp,
+                                fontSize = 19.sp,
+                                letterSpacing = 0.8.sp,
                                 color = Color.White
-                            )
+                            ),
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
@@ -220,40 +219,6 @@ fun RodCard(
                                 ),
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
-                        }
-                    }
-
-                    // 🎣 OTOMATİK KALİBRE EDİLEN KAMIŞ PROFİLİ ROZETİ (Yalnızca profile varsa gösterilir)
-                    if (!rod.assignedRodProfileName.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Surface(
-                            color = Color(0xFF0F1A1B),
-                            shape = RoundedCornerShape(4.dp),
-                            border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.4f))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Text(
-                                    text = "🎣 ${rod.assignedRodProfileName}",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = NeonGreen,
-                                        fontSize = 15.5.sp, // 3sp artırıldı
-                                        fontWeight = FontWeight.Bold
-                                    ),
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = "• Oto-Kalibre ⚡",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = Color(0xFF68D391),
-                                        fontSize = 15.sp, // 3sp artırıldı
-                                        fontWeight = FontWeight.Normal
-                                    )
-                                )
-                            }
                         }
                     }
 
@@ -414,7 +379,7 @@ fun RodCard(
                     .clip(RoundedCornerShape(18.dp))
                     .background(Color(0xFF0C0E14))
                     .border(1.dp, NeonGreen.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
-                    .padding(vertical = 10.dp, horizontal = 14.dp),
+                    .padding(vertical = 10.dp, horizontal = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Row(
@@ -436,6 +401,27 @@ fun RodCard(
                             ledColor = rod.ledColor,
                             alarmType = rod.alarmType,
                             strikeIntensity = rod.strikeIntensity
+                        )
+
+                        // 🎣 DİKEY KARBON MARKA & YEM YAZISI (VERTICAL ROD BRANDING)
+                        val brandLabel = rod.assignedRodProfileName?.ifBlank { null } ?: rod.name
+                        val baitPart = if (rod.baitNote.isNotBlank()) " • 🪱 ${rod.baitNote.uppercase()}" else ""
+                        val verticalText = "🎣 ${brandLabel.uppercase()}$baitPart"
+
+                        Text(
+                            text = verticalText,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = NeonGreen.copy(alpha = 0.80f),
+                                fontWeight = FontWeight.Black,
+                                fontSize = 10.5.sp,
+                                letterSpacing = 1.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .rotate(-90f)
                         )
                     }
 

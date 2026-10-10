@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -41,8 +42,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import kotlinx.coroutines.delay
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -120,6 +124,16 @@ fun FishingAlarmScreen(
     val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsState()
     val isDownloadingUpdate by viewModel.isDownloadingUpdate.collectAsState()
     val updateError by viewModel.updateError.collectAsState()
+    val appVolume by viewModel.appVolume.collectAsState()
+
+    val customNormalSoundUri by viewModel.customNormalSoundUri.collectAsState()
+    val customNormalSoundName by viewModel.customNormalSoundName.collectAsState()
+    val customDropBackSoundUri by viewModel.customDropBackSoundUri.collectAsState()
+    val customDropBackSoundName by viewModel.customDropBackSoundName.collectAsState()
+    val customTheftSoundUri by viewModel.customTheftSoundUri.collectAsState()
+    val customTheftSoundName by viewModel.customTheftSoundName.collectAsState()
+    val customDragSoundUri by viewModel.customDragSoundUri.collectAsState()
+    val customDragSoundName by viewModel.customDragSoundName.collectAsState()
 
     var showAddRodPairingDialog by remember { mutableStateOf(false) }
     var showLogsDialog by remember { mutableStateOf(false) }
@@ -133,10 +147,19 @@ fun FishingAlarmScreen(
 
     val hasActiveAlarm = rods.any { it.isAlarming }
 
-    // Toast/Snackbar notifications
+    // Toast/Snackbar notifications: Asılı kalmaz, kuyruk yapmaz, 1.2 sn içinde silinir!
     LaunchedEffect(Unit) {
         viewModel.toastEvent.collect { message ->
-            snackbarHostState.showSnackbar(message)
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val job = launch {
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    duration = SnackbarDuration.Indefinite
+                )
+            }
+            delay(1200)
+            job.cancel()
+            snackbarHostState.currentSnackbarData?.dismiss()
         }
     }
 
@@ -216,7 +239,21 @@ fun FishingAlarmScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MatteBlackBg),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .padding(bottom = 85.dp)
+                    .clickable { snackbarHostState.currentSnackbarData?.dismiss() }
+            ) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = Color(0xFF1E293B),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(8.dp)
+                )
+            }
+        },
         containerColor = MatteBlackBg
     ) { innerPadding ->
         Column(
@@ -314,9 +351,7 @@ fun FishingAlarmScreen(
                         onTheftColorSelected = { color ->
                             viewModel.updateTheftLedColor(rod.id, color)
                         },
-                        onTestTriggerClick = {
-                            viewModel.triggerAlarmForRod(rod.id)
-                        },
+
                         onEditRodClick = {
                             rodToEdit = rod
                         },
@@ -329,7 +364,7 @@ fun FishingAlarmScreen(
                         onTogglePower = { isArmed ->
                             viewModel.toggleRodPower(rod.id, isArmed)
                         },
-                        modifier = Modifier.fillMaxHeight()
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }
@@ -360,15 +395,19 @@ fun FishingAlarmScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        // Sayaç Metni
+                        // Sayaç Metni (Kullanıcının Verdiği Özel Ad ile Canlı Senkronize)
+                        val rodDisplayName = currentRod?.name?.uppercase() ?: "OLTA ${pagerState.currentPage + 1}"
+                        val pageCounterText = "$rodDisplayName (${pagerState.currentPage + 1}/${rods.size})"
+
                         Text(
-                            text = "OLTA ${pagerState.currentPage + 1} / ${rods.size}",
+                            text = pageCounterText,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 color = if (isCurrentRodArmed) NeonGreen else Color(0xFF9E9E9E),
                                 fontWeight = FontWeight.Black,
-                                fontSize = 17.sp, // 3px (3sp) artırıldı
+                                fontSize = 15.5.sp,
                                 letterSpacing = 0.8.sp
-                            )
+                            ),
+                            maxLines = 1
                         )
 
                         // İkinci Dikey Ayırıcı
@@ -553,6 +592,9 @@ fun FishingAlarmScreen(
             },
             onSaveNewProfile = { profile ->
                 viewModel.saveNewRodProfile(profile)
+            },
+            onResetPreTension = { rodId ->
+                viewModel.resetPreTensionBaseline(rodId)
             }
         )
     }
@@ -562,9 +604,6 @@ fun FishingAlarmScreen(
         PacketLogDialog(
             logs = logs,
             rods = rods,
-            onSimulateTrigger = { id -> viewModel.triggerNormalAlarmForRod(id) },
-            onSimulateDropBack = { id -> viewModel.triggerDropBackAlarmForRod(id) },
-            onSimulateBattery = { id, pct -> viewModel.simulateBattery(id, pct) },
             onDismiss = { showLogsDialog = false }
         )
     }
@@ -589,6 +628,8 @@ fun FishingAlarmScreen(
         AudioSettingsDialog(
             currentUserName = viewModel.userName,
             currentSoundStyle = soundStyle,
+            currentAppVolume = appVolume,
+            onVolumeChangeLive = { vol -> viewModel.setAppVolumeLive(vol) },
             isMasterSystemActive = isMasterSystemActive,
             onToggleMasterSystemPower = { active -> viewModel.setMasterSystemPower(active) },
             currentMode = connectionMode,
@@ -605,8 +646,8 @@ fun FishingAlarmScreen(
                 viewModel.updateRodThresholds(rodId, config)
             },
             onDismiss = { showAudioSettingsDialog = false },
-            onSave = { newName, newStyle ->
-                viewModel.updateAudioSettings(newName, newStyle)
+            onSave = { newName, newStyle, newVolume ->
+                viewModel.updateAudioSettings(newName, newStyle, newVolume)
             },
             onTerminateFishing = {
                 viewModel.terminateFishingSession()
@@ -615,7 +656,19 @@ fun FishingAlarmScreen(
             onOpenPermissions = { showLockscreenPermissionDialog = true },
             onToggleNightMode = { viewModel.toggleNightMode(true) },
             onTestAlarmSound = { viewModel.testAlarmSound() },
+            onTestAlarmSoundWithStyle = { style -> viewModel.testAlarmSound(style) },
+            onTestDropBackSound = { viewModel.testDropBackSound() },
+            onTestTheftSound = { viewModel.testTheftSound() },
             onTestReelDragSound = { viewModel.testReelDragSound() },
+            customNormalSoundUri = customNormalSoundUri,
+            customNormalSoundName = customNormalSoundName,
+            customDropBackSoundUri = customDropBackSoundUri,
+            customDropBackSoundName = customDropBackSoundName,
+            customTheftSoundUri = customTheftSoundUri,
+            customTheftSoundName = customTheftSoundName,
+            customDragSoundUri = customDragSoundUri,
+            customDragSoundName = customDragSoundName,
+            onSetCustomSound = { key, uri, name -> viewModel.setCustomSound(key, uri, name) },
             currentAppVersion = viewModel.currentAppVersion,
             onCheckForUpdates = { viewModel.checkForAppUpdates(isManualCheck = true) }
         )

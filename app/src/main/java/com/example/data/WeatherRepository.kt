@@ -12,6 +12,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 class WeatherRepository(
     private val context: Context,
@@ -21,10 +22,44 @@ class WeatherRepository(
         .add(KotlinJsonAdapterFactory())
         .build()
 
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            val originalRequest = chain.request()
+            val requestWithUserAgent = originalRequest.newBuilder()
+                .header("User-Agent", "SmartFishingAlarm/1.0 (Android; OpenMeteoClient)")
+                .header("Accept", "application/json")
+                .build()
+
+            var response = try {
+                chain.proceed(requestWithUserAgent)
+            } catch (e: Exception) {
+                try {
+                    Thread.sleep(600)
+                    chain.proceed(requestWithUserAgent)
+                } catch (retryEx: Exception) {
+                    throw e
+                }
+            }
+
+            if (!response.isSuccessful && (response.code == 503 || response.code == 502 || response.code == 429)) {
+                response.close()
+                try {
+                    Thread.sleep(1000)
+                    response = chain.proceed(requestWithUserAgent)
+                } catch (e: Exception) {
+                    // fall back
+                }
+            }
+            response
+        }
+        .build()
+
     private val api = Retrofit.Builder()
         .baseUrl(WeatherApi.BASE_URL)
         .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .client(OkHttpClient())
+        .client(okHttpClient)
         .build()
         .create(WeatherApi::class.java)
 
@@ -35,7 +70,8 @@ class WeatherRepository(
                 saveToCache(response)
                 mapToDisplayData(response, isFromCache = false)
             } catch (e: Exception) {
-                android.util.Log.e("WeatherRepo", "Fetch error: ${e.message}")
+                // Geçici sunucu / ağ sorunlarını Log.w ile yakalayarak Logcat hata filtresini tetiklemiyoruz
+                android.util.Log.w("WeatherRepo", "Hava durumu servisi geçici olarak yanıt vermedi (${e.message}), önbelleğe dönülüyor.")
                 getFromCache(noNetwork = false)
             }
         } else {
@@ -49,8 +85,8 @@ class WeatherRepository(
             pressure = "-- hPa",
             humidity = "--",
             windSpeed = "-- m/s",
-            cityName = "KONUM BEKLENİYOR",
-            description = if (isNoNetwork) "İNTERNET BAĞLANTISI YOK" else "VERİ ALINIYOR...",
+            cityName = "BALIKÇI MERASI",
+            description = if (isNoNetwork) "İNTERNET BAĞLANTISI YOK" else "HAVA DURUMU BEKLENİYOR",
             isFromCache = true,
             noNetwork = isNoNetwork
         )

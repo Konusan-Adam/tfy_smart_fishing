@@ -65,8 +65,8 @@ fun MinimalistRodSlider(
             text = "HASSASİYET",
             style = MaterialTheme.typography.labelSmall.copy(
                 color = Color(0xFF6B7280),
-                fontSize = 15.sp,
-                letterSpacing = 2.sp,
+                fontSize = 12.sp,
+                letterSpacing = 1.5.sp,
                 fontWeight = FontWeight.Bold
             )
         )
@@ -82,17 +82,17 @@ fun MinimalistRodSlider(
                 text = "$currentLevel",
                 style = MaterialTheme.typography.displayMedium.copy(
                     color = NeonGreen,
-                    fontSize = 38.sp,
+                    fontSize = 32.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.SansSerif
                 )
             )
             Text(
                 text = "/10",
-                modifier = Modifier.padding(bottom = 6.dp, start = 2.dp),
+                modifier = Modifier.padding(bottom = 4.dp, start = 2.dp),
                 style = MaterialTheme.typography.titleMedium.copy(
                     color = Color(0xFF4B5563),
-                    fontSize = 15.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
                 )
             )
@@ -103,17 +103,17 @@ fun MinimalistRodSlider(
             color = Color(0xFF10241A),
             shape = RoundedCornerShape(6.dp),
             border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.6f)),
-            modifier = Modifier.padding(vertical = 3.dp)
+            modifier = Modifier.padding(vertical = 2.dp)
         ) {
             Text(
                 text = "⚡ $displayMg mG Dinamik",
                 style = MaterialTheme.typography.labelSmall.copy(
                     color = NeonGreen,
                     fontWeight = FontWeight.Black,
-                    fontSize = 13.sp,
+                    fontSize = 11.5.sp,
                     letterSpacing = 0.3.sp
                 ),
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
 

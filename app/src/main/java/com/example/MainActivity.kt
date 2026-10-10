@@ -49,6 +49,8 @@ class MainActivity : ComponentActivity() {
         // Arka plan zırhı ve CPU WakeLock servisini başlat
         try {
             com.example.service.FishingWatchdogService.start(this)
+            com.example.notification.TfyNotificationManager.createNotificationChannels(this)
+            com.example.notification.TfyNotificationManager.fetchRealFcmToken(this)
         } catch (e: Exception) {
             e.printStackTrace()
         }

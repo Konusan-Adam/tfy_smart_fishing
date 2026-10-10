@@ -1,7 +1,15 @@
 package com.example.ui.components
 
+import android.app.Activity
 import android.bluetooth.BluetoothDevice
+import android.content.Intent
+import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
+import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,6 +89,8 @@ import com.example.ui.theme.NeonGreen
 fun AudioSettingsDialog(
     currentUserName: String,
     currentSoundStyle: SoundStyle,
+    currentAppVolume: Float = 1.0f,
+    onVolumeChangeLive: (Float) -> Unit = {},
     isMasterSystemActive: Boolean = true,
     onToggleMasterSystemPower: (Boolean) -> Unit = {},
     currentMode: ConnectionMode = ConnectionMode.BLUETOOTH,
@@ -93,22 +103,81 @@ fun AudioSettingsDialog(
     onToggleRodPower: (rodId: Int, isArmed: Boolean) -> Unit = { _, _ -> },
     onUpdateThresholds: (rodId: Int, config: SensorThresholdConfig) -> Unit = { _, _ -> },
     onDismiss: () -> Unit,
-    onSave: (userName: String, soundStyle: SoundStyle) -> Unit,
+    onSave: (userName: String, soundStyle: SoundStyle, appVolume: Float) -> Unit,
     onTerminateFishing: () -> Unit = {},
     onOpenLogs: () -> Unit = {},
     onOpenPermissions: () -> Unit = {},
     onToggleNightMode: () -> Unit = {},
     onTestAlarmSound: () -> Unit = {},
+    onTestAlarmSoundWithStyle: (SoundStyle) -> Unit = {},
+    onTestDropBackSound: () -> Unit = {},
+    onTestTheftSound: () -> Unit = {},
     onTestReelDragSound: () -> Unit = {},
+    customNormalSoundUri: String? = null,
+    customNormalSoundName: String? = null,
+    customDropBackSoundUri: String? = null,
+    customDropBackSoundName: String? = null,
+    customTheftSoundUri: String? = null,
+    customTheftSoundName: String? = null,
+    customDragSoundUri: String? = null,
+    customDragSoundName: String? = null,
+    onSetCustomSound: (scenarioKey: String, uri: String?, displayName: String?) -> Unit = { _, _, _ -> },
     currentAppVersion: String = "1.0.0",
     onCheckForUpdates: () -> Unit = {}
 ) {
     var nameText by remember { mutableStateOf(currentUserName) }
     var selectedStyle by remember { mutableStateOf(currentSoundStyle) }
+    var appVolumeState by remember { mutableFloatStateOf(currentAppVolume) }
     var showDeviceList by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    var activeScenarioKeyForPicker by remember { mutableStateOf<String?>(null) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        val key = activeScenarioKeyForPicker
+        if (uri != null && key != null) {
+            var name = "Özel MP3"
+            try {
+                context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (idx != -1) {
+                            val displayName = cursor.getString(idx)
+                            if (!displayName.isNullOrBlank()) name = displayName
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+            onSetCustomSound(key, uri.toString(), name)
+        }
+    }
+
+    val ringtonePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val key = activeScenarioKeyForPicker
+        if (result.resultCode == Activity.RESULT_OK && key != null) {
+            val pickedUri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            }
+            if (pickedUri != null) {
+                var name = "Sistem Zil Sesi"
+                try {
+                    val ringtone = RingtoneManager.getRingtone(context, pickedUri)
+                    val title = ringtone?.getTitle(context)
+                    if (!title.isNullOrBlank()) name = title
+                } catch (_: Exception) {}
+                onSetCustomSound(key, pickedUri.toString(), name)
+            }
+        }
+    }
     var isSavedToSensor by remember { mutableStateOf(false) }
     var isSyncing by remember { mutableStateOf(false) }
 
@@ -117,6 +186,9 @@ fun AudioSettingsDialog(
     val activeRod = rods.find { it.id == targetRodId } ?: rods.firstOrNull()
     val initialConfig = activeRod?.thresholdConfig ?: SensorThresholdConfig.DEFAULT
 
+    var strikeAngleDeg by remember(targetRodId, activeRod?.thresholdConfig) {
+        mutableFloatStateOf(initialConfig.strikeAngleDeg)
+    }
     var shockMg by remember(targetRodId, activeRod?.thresholdConfig) {
         mutableFloatStateOf(initialConfig.shockAccelThresholdMg)
     }
@@ -136,6 +208,7 @@ fun AudioSettingsDialog(
     val hasUnsavedChanges = (initialConfig.shockAccelThresholdMg != shockMg) ||
         (initialConfig.dropBackAngleDeg != dropBackDeg) ||
         (initialConfig.theftAngleDeg != theftDeg) ||
+        (initialConfig.strikeAngleDeg != strikeAngleDeg) ||
         (initialConfig.sampleIntervalMs != sampleMs) ||
         (initialConfig.pingIntervalSec != pingSec)
 
@@ -644,10 +717,340 @@ fun AudioSettingsDialog(
                     shape = RoundedCornerShape(12.dp)
                 )
 
-                // Alarm Tonu Seçimi
+                // 🔊 UYGULAMA MÜSTAKİL SES SEVİYESİ (MASTER VOLUME CONTROL)
+                Surface(
+                    color = Color(0xFF0F141F),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFF223048)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.VolumeUp,
+                                    contentDescription = null,
+                                    tint = NeonGreen,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "🔊 UYGULAMA SES SEVİYESİ",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        color = NeonGreen,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                )
+                            }
+
+                            val volPercent = (appVolumeState * 100).toInt()
+                            val volBadgeText = when {
+                                volPercent == 0 -> "SESSİZ (%0)"
+                                volPercent < 40 -> "GECE DÜŞÜK (%$volPercent)"
+                                volPercent < 80 -> "DENGELİ (%$volPercent)"
+                                else -> "MAKSİMUM GÜÇ (%$volPercent)"
+                            }
+                            Surface(
+                                color = if (volPercent == 0) Color(0xFF331B1B) else Color(0xFF162529),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, if (volPercent == 0) Color(0xFFEF4444) else NeonGreen.copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = volBadgeText,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = if (volPercent == 0) Color(0xFFFCA5A5) else NeonGreen,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        // Volume Slider
+                        Slider(
+                            value = appVolumeState,
+                            onValueChange = { newVol ->
+                                appVolumeState = newVol
+                                onVolumeChangeLive(newVol)
+                            },
+                            valueRange = 0f..1f,
+                            steps = 20,
+                            colors = SliderDefaults.colors(
+                                thumbColor = NeonGreen,
+                                activeTrackColor = NeonGreen,
+                                inactiveTrackColor = Color(0xFF1E293B)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("app_volume_slider")
+                        )
+
+                        // Quick Presets Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val presets = listOf(
+                                "🌙 Sessiz" to 0.0f,
+                                "☕ Gece (%30)" to 0.3f,
+                                "🎣 Standart (%60)" to 0.6f,
+                                "📢 Max (%100)" to 1.0f
+                            )
+                            presets.forEach { (label, targetVol) ->
+                                val isSelected = Math.abs(appVolumeState - targetVol) < 0.05f
+                                Surface(
+                                    color = if (isSelected) NeonGreen.copy(alpha = 0.2f) else Color(0xFF161B26),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, if (isSelected) NeonGreen else Color(0xFF2D3748)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            appVolumeState = targetVol
+                                            onVolumeChangeLive(targetVol)
+                                        }
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                            fontSize = 9.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        ),
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 🎵 SENARYO BAZLI ÖZEL MP3 VE ZİL SESİ ATAMA PANELDEN KULLANICI SEÇİMLERİ
+                Surface(
+                    color = Color(0xFF0F141F),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VolumeUp,
+                                contentDescription = null,
+                                tint = NeonGreen,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "📁 SENARYO BAZLI ÖZEL MP3 / ZİL SESİ SEÇİMİ",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    color = NeonGreen,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                            )
+                        }
+
+                        Text(
+                            text = "Telefonunuzdaki istediğiniz MP3, müzik veya zil sesini her bir uyarı senaryosu için ayrı ayrı atayabilirsiniz.",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 10.5.sp
+                            )
+                        )
+
+                        val scenarioItems = listOf(
+                            Triple("normal", "1. Normal Vuruş (Sazan Deparı / Run)", Pair(customNormalSoundUri, customNormalSoundName)),
+                            Triple("dropback", "2. Boşa Düşme (Misina Gevşemesi)", Pair(customDropBackSoundUri, customDropBackSoundName)),
+                            Triple("theft", "3. Hırsızlık İkazı (Sehpadan Dikilme)", Pair(customTheftSoundUri, customTheftSoundName)),
+                            Triple("drag", "4. Makara Kalama / Cırcır Sesi", Pair(customDragSoundUri, customDragSoundName))
+                        )
+
+                        scenarioItems.forEach { (key, title, soundPair) ->
+                            val uri = soundPair.first
+                            val name = soundPair.second
+                            val hasCustom = !uri.isNullOrBlank()
+
+                            Surface(
+                                color = if (hasCustom) Color(0xFF14221A) else Color(0xFF111520),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, if (hasCustom) NeonGreen else Color(0xFF232B3E)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = title,
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.5.sp
+                                            )
+                                        )
+
+                                        if (hasCustom) {
+                                            Surface(
+                                                color = NeonGreen.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                border = BorderStroke(0.8.dp, NeonGreen)
+                                            ) {
+                                                Text(
+                                                    text = "Özel Ses Aktif",
+                                                    color = NeonGreen,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Varsayılan Sentez",
+                                                color = Color(0xFF64748B),
+                                                fontSize = 9.5.sp
+                                            )
+                                        }
+                                    }
+
+                                    // Seçili Ses Etiketi
+                                    Text(
+                                        text = if (hasCustom) "🎵 ${name ?: "Özel Ses Dosyası"}" else "🔊 Varsayılan (Türkçe Asistan / Siren / Kalama)",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = if (hasCustom) NeonGreen else Color(0xFF94A3B8),
+                                            fontSize = 10.5.sp,
+                                            fontWeight = if (hasCustom) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    )
+
+                                    // İşlem Butonları
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        // 📁 MP3 Dosyası Seç
+                                        Surface(
+                                            color = Color(0xFF1E293B),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, Color(0xFF334155)),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    activeScenarioKeyForPicker = key
+                                                    filePickerLauncher.launch("audio/*")
+                                                }
+                                        ) {
+                                            Text(
+                                                text = "📁 MP3 Seç",
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                                modifier = Modifier.padding(vertical = 6.dp)
+                                            )
+                                        }
+
+                                        // 🔔 Zil Sesi Seç
+                                        Surface(
+                                            color = Color(0xFF1E293B),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, Color(0xFF334155)),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    activeScenarioKeyForPicker = key
+                                                    val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                                        putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
+                                                        putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "$title İçin Zil Sesi Seç")
+                                                        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                                        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                                    }
+                                                    ringtonePickerLauncher.launch(intent)
+                                                }
+                                        ) {
+                                            Text(
+                                                text = "🔔 Zil Sesi Seç",
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                                modifier = Modifier.padding(vertical = 6.dp)
+                                            )
+                                        }
+
+                                        // 🔊 Test Et
+                                        Surface(
+                                            color = Color(0xFF0F2D1E),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.6f)),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    when (key) {
+                                                        "normal" -> onTestAlarmSound()
+                                                        "dropback" -> onTestDropBackSound()
+                                                        "theft" -> onTestTheftSound()
+                                                        "drag" -> onTestReelDragSound()
+                                                    }
+                                                }
+                                        ) {
+                                            Text(
+                                                text = "🔊 Test Et",
+                                                color = NeonGreen,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                                modifier = Modifier.padding(vertical = 6.dp)
+                                            )
+                                        }
+
+                                        // ❌ Sıfırla (Sadece özel ses varsa gösterilir)
+                                        if (hasCustom) {
+                                            Surface(
+                                                color = Color(0xFF3B1818),
+                                                shape = RoundedCornerShape(6.dp),
+                                                border = BorderStroke(1.dp, Color(0xFFEF4444)),
+                                                modifier = Modifier
+                                                    .clickable { onSetCustomSound(key, null, null) }
+                                            ) {
+                                                Text(
+                                                    text = "❌",
+                                                    color = Color(0xFFFCA5A5),
+                                                    fontSize = 10.sp,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 🎼 Alarm Tonu ve Tarzı Seçimi (Tüm Bildirim Sesleri)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Alarm Tonu ve Tarzı:",
+                        text = "🎼 TÜM BİLDİRİM & ALARM SES TEMASI:",
                         style = MaterialTheme.typography.labelSmall.copy(
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp,
@@ -667,32 +1070,68 @@ fun AudioSettingsDialog(
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = { selectedStyle = style },
-                                    colors = RadioButtonDefaults.colors(
-                                        selectedColor = NeonGreen,
-                                        unselectedColor = Color(0xFF55607A)
-                                    )
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Column {
-                                    Text(
-                                        text = style.title,
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            color = if (isSelected) Color.White else Color(0xFFCBD5E1),
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = { selectedStyle = style },
+                                        colors = RadioButtonDefaults.colors(
+                                            selectedColor = NeonGreen,
+                                            unselectedColor = Color(0xFF55607A)
                                         )
                                     )
-                                    Text(
-                                        text = style.desc,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = Color(0xFF7E8B9B),
-                                            fontSize = 10.sp
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column {
+                                        Text(
+                                            text = style.title,
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                color = if (isSelected) Color.White else Color(0xFFCBD5E1),
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                fontSize = 12.5.sp
+                                            )
                                         )
-                                    )
+                                        Text(
+                                            text = style.desc,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = Color(0xFF7E8B9B),
+                                                fontSize = 10.sp
+                                            )
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    color = Color(0xFF10281F),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.5f)),
+                                    modifier = Modifier.clickable {
+                                        selectedStyle = style
+                                        onTestAlarmSoundWithStyle(style)
+                                    }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = null,
+                                            tint = NeonGreen,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Text(
+                                            text = "Dinle",
+                                            color = NeonGreen,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -773,6 +1212,81 @@ fun AudioSettingsDialog(
                                                 fontSize = 10.sp
                                             ),
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 0. VURUŞ / ÖNE BÜKÜLME AÇISI (Derece)
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Vuruş / Öne Bükülme Açısı",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        )
+                                    )
+                                    Text(
+                                        text = "Kamış suya eğilme eşiği (Yüksek açı küçük balığı eler)",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = Color(0xFF7E8B9B),
+                                            fontSize = 9.5.sp
+                                        )
+                                    )
+                                }
+                                Text(
+                                    text = String.format(java.util.Locale.US, "%.1f°", strikeAngleDeg),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        color = Color(0xFF00E5FF),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                            }
+                            Slider(
+                                value = strikeAngleDeg,
+                                onValueChange = { strikeAngleDeg = it },
+                                valueRange = 1.0f..15.0f,
+                                steps = 27,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color(0xFF00E5FF),
+                                    activeTrackColor = Color(0xFF00E5FF),
+                                    inactiveTrackColor = Color(0xFF253046)
+                                )
+                            )
+
+                            // 🎯 Hızlı Vuruş Açısı Presetleri (1.5° / 2.5° / 4.0°)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                listOf(1.5f to "1.5° (Hassas)", 2.5f to "2.5° (Standart)", 4.0f to "4.0° (Sazan / İri)").forEach { (presetDeg, label) ->
+                                    val isMatch = kotlin.math.abs(strikeAngleDeg - presetDeg) < 0.2f
+                                    Surface(
+                                        color = if (isMatch) Color(0xFF00E5FF).copy(alpha = 0.25f) else Color(0xFF141926),
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, if (isMatch) Color(0xFF00E5FF) else Color(0xFF28344A)),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { strikeAngleDeg = presetDeg }
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = if (isMatch) Color(0xFF00E5FF) else Color(0xFF94A3B8),
+                                                fontWeight = if (isMatch) FontWeight.Black else FontWeight.Bold,
+                                                fontSize = 9.5.sp
+                                            ),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp)
                                         )
                                     }
                                 }
@@ -870,7 +1384,7 @@ fun AudioSettingsDialog(
                                         )
                                     )
                                     Text(
-                                        text = "Misina boşaldığında kamışın geriye yaylanma açısı",
+                                        text = "Misina boşaldığında kamışın geriye dikleşme açısı",
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             color = Color(0xFF7E8B9B),
                                             fontSize = 9.5.sp
@@ -890,14 +1404,43 @@ fun AudioSettingsDialog(
                             Slider(
                                 value = dropBackDeg,
                                 onValueChange = { dropBackDeg = it },
-                                valueRange = 1.5f..15.0f,
-                                steps = 26,
+                                valueRange = 0.2f..3.0f,
+                                steps = 27,
                                 colors = SliderDefaults.colors(
                                     thumbColor = Color(0xFFFFD166),
                                     activeTrackColor = Color(0xFFFFD166),
                                     inactiveTrackColor = Color(0xFF253046)
                                 )
                             )
+
+                            // 🎯 Hızlı Boşa Düşme Presetleri (0.3° / 0.5° / 0.8°)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                listOf(0.3f to "0.3° (Hassas)", 0.5f to "0.5° (Standart)", 0.8f to "0.8° (Dirençli)").forEach { (presetDeg, label) ->
+                                    val isMatch = kotlin.math.abs(dropBackDeg - presetDeg) < 0.08f
+                                    Surface(
+                                        color = if (isMatch) Color(0xFFFFD166).copy(alpha = 0.25f) else Color(0xFF141926),
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, if (isMatch) Color(0xFFFFD166) else Color(0xFF28344A)),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { dropBackDeg = presetDeg }
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = if (isMatch) Color(0xFFFFD166) else Color(0xFF94A3B8),
+                                                fontWeight = if (isMatch) FontWeight.Black else FontWeight.Bold,
+                                                fontSize = 9.5.sp
+                                            ),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         // 3. HIRSIZLIK / DİKİLME AÇISI (Derece)
@@ -1103,16 +1646,12 @@ fun AudioSettingsDialog(
                             OutlinedButton(
                                 onClick = {
                                     val synced = SensorThresholdConfig.fromSensitivity(activeRod?.sensitivity ?: 5)
+                                    strikeAngleDeg = synced.strikeAngleDeg
                                     shockMg = synced.shockAccelThresholdMg
                                     dropBackDeg = synced.dropBackAngleDeg
                                     theftDeg = synced.theftAngleDeg
                                     sampleMs = synced.sampleIntervalMs
                                     pingSec = synced.pingIntervalSec
-                                    Toast.makeText(
-                                        context,
-                                        "⚡ Eşikler ${activeRod?.name ?: "Olta"} hassasiyetine (${activeRod?.sensitivity ?: 5}/10) eşitlendi: ${synced.shockAccelThresholdMg.toInt()} mG",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
                                 },
                                 shape = RoundedCornerShape(8.dp),
                                 border = BorderStroke(1.dp, Color(0xFF33425E)),
@@ -1131,19 +1670,14 @@ fun AudioSettingsDialog(
                                         shockAccelThresholdMg = shockMg,
                                         dropBackAngleDeg = dropBackDeg,
                                         theftAngleDeg = theftDeg,
+                                        strikeAngleDeg = strikeAngleDeg,
                                         sampleIntervalMs = sampleMs,
                                         pingIntervalSec = pingSec
                                     )
                                     onUpdateThresholds(targetRodId, newConfig)
                                     isSavedToSensor = true
-                                    val pingText = if (pingSec >= 3600) "${pingSec / 3600} Saat" else "$pingSec sn"
-                                    Toast.makeText(
-                                        context,
-                                        "✓ ${activeRod?.name ?: "Olta $targetRodId"} Sensör Eşikleri Kaydedildi!\nŞok: ${shockMg.toInt()} mG | Boşa: ${dropBackDeg}° | Hız: ${sampleMs}ms | Kalp: $pingText",
-                                        Toast.LENGTH_LONG
-                                    ).show()
                                     coroutineScope.launch {
-                                        delay(2800)
+                                        delay(1500)
                                         isSavedToSensor = false
                                     }
                                 },
@@ -1177,6 +1711,9 @@ fun AudioSettingsDialog(
                     }
                 }
 
+                // 🔔 CANLI BİLDİRİM VE PUSH PANELİ (FIREBASE FCM)
+                NotificationSettingsCard()
+
                 // 4. HIZLI ARAÇLAR & ALARM SESİNİ TEST ET
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -1188,7 +1725,7 @@ fun AudioSettingsDialog(
                         )
                     )
 
-                    // Alarm Sesini Güvenli Test Et Butonu
+                    // Alarm Sesini Güvenli Test Et (Normal Vuruş)
                     Surface(
                         color = Color(0xFF101F18),
                         shape = RoundedCornerShape(10.dp),
@@ -1210,14 +1747,86 @@ fun AudioSettingsDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
-                                    text = "🔊 Alarm Sesini Test Et",
+                                    text = "🚨 Düz Vuruş Alarmını Test Et (Siren + Kalama)",
                                     color = Color.White,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Seçili ses temasını ve flaşörü dener",
+                                    text = "Sazan asılmasında çalan ana alarm anonsu",
                                     color = Color(0xFF94A3B8),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Boşa Düşme (Drop-Back) Test Et
+                    Surface(
+                        color = Color(0xFF1B1A12),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, Color(0xFFEAB308).copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onTestDropBackSound() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color(0xFFEAB308),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "📉 Boşa Düşme (Swinger) Alarmını Test Et",
+                                    color = Color(0xFFFEF08A),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Misina gevşemesinde telaşlı kesik ses uyarısı",
+                                    color = Color(0xFFA1A1AA),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Hırsızlık Alarmını Test Et
+                    Surface(
+                        color = Color(0xFF221213),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onTestTheftSound() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color(0xFFEF4444),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "🔒 Hırsızlık / Sehpadan Dikilme Alarmını Test Et",
+                                    color = Color(0xFFFCA5A5),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Olta yerinden söküldüğünde acil çakar uyarısı",
+                                    color = Color(0xFFA1A1AA),
                                     fontSize = 10.sp
                                 )
                             }
@@ -1424,11 +2033,12 @@ fun AudioSettingsDialog(
                         shockAccelThresholdMg = shockMg,
                         dropBackAngleDeg = dropBackDeg,
                         theftAngleDeg = theftDeg,
+                        strikeAngleDeg = strikeAngleDeg,
                         sampleIntervalMs = sampleMs,
                         pingIntervalSec = pingSec
                     )
                     onUpdateThresholds(targetRodId, currentConfig)
-                    onSave(nameText.trim(), selectedStyle)
+                    onSave(nameText.trim(), selectedStyle, appVolumeState)
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = NeonGreen),
